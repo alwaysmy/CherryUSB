@@ -380,7 +380,7 @@ typedef struct __attribute__((packed)) {
 #define USBHS_EP8_T_TYP (1 << 8)
 #define USBHS_EP8_R_TYP (1 << 24)
 
-#define USBHS_EP9_T_TYP (1 << 8)
+#define USBHS_EP9_T_TYP (1 << 9)
 #define USBHS_EP9_R_TYP (1 << 25)
 
 #define USBHS_EP10_T_TYP (1 << 10)

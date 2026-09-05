@@ -44,6 +44,21 @@ volatile bool ep0_rx_data_toggle;
 volatile bool ep0_tx_data_toggle;
 volatile bool epx_tx_data_toggle[USB_NUM_BIDIR_ENDPOINTS - 1];
 
+/* EP0 完整准备: 总线复位与 usb_dc_init 共用; 在 usbd_event_reset_handler
+ * 前后各调一次(幂等), 后者恢复 usbd_ep_open 覆盖掉的 EP0 响应/翻转状态 */
+static void ch32_usbhs_ep0_prepare(void)
+{
+    USBHS_DEVICE->ENDP_CONFIG = USBHS_EP0_T_EN | USBHS_EP0_R_EN;
+    USBHS_DEVICE->UEP0_MAX_LEN = USB_CTRL_EP_MPS;
+    USBHS_DEVICE->UEP0_DMA = (uint32_t)&g_ch32_usbhs_udc.setup;
+    USBHS_DEVICE->UEP0_TX_LEN = 0;
+    USBHS_DEVICE->UEP0_TX_CTRL = USBHS_EP_T_RES_NAK;
+    USBHS_DEVICE->UEP0_RX_CTRL = USBHS_EP_R_RES_ACK;
+
+    ep0_tx_data_toggle = true;
+    ep0_rx_data_toggle = true;
+}
+
 __WEAK void usb_dc_low_level_init(void)
 {
 }
@@ -54,10 +69,22 @@ __WEAK void usb_dc_low_level_deinit(void)
 
 int usb_dc_init(uint8_t busid)
 {
+    uint32_t phy_delay;
+
     usb_dc_low_level_init();
+
+    /* WCH 参考初始化序列: 强位复位 USB 内核并等待 PHY 稳定,
+     * 缺少该序列会导致间歇性枚举失败 */
+    USBHS_DEVICE->CONTROL = USBHS_ALL_CLR | USBHS_FORCE_RST;
+    phy_delay = 1000;
+    while (--phy_delay);
+    USBHS_DEVICE->CONTROL &= ~USBHS_FORCE_RST;
 
     USBHS_DEVICE->HOST_CTRL = 0x00;
     USBHS_DEVICE->HOST_CTRL = USBHS_PHY_SUSPENDM;
+
+    phy_delay = 50000;
+    while (--phy_delay);
 
     USBHS_DEVICE->CONTROL = 0;
 #ifdef CONFIG_USB_HS
@@ -68,10 +95,12 @@ int usb_dc_init(uint8_t busid)
 
     USBHS_DEVICE->INT_FG = 0xff;
     USBHS_DEVICE->INT_EN = 0;
-    USBHS_DEVICE->INT_EN = USBHS_SETUP_ACT_EN | USBHS_TRANSFER_EN | USBHS_DETECT_EN;
+    USBHS_DEVICE->INT_EN = USBHS_SETUP_ACT_EN | USBHS_TRANSFER_EN | USBHS_DETECT_EN | USBHS_SUSPEND_EN;
 
     USBHS_DEVICE->ENDP_TYPE = 0x00;
     USBHS_DEVICE->BUF_MODE = 0x00;
+    memset(&g_ch32_usbhs_udc, 0, sizeof(struct ch32_usbhs_udc));
+    ch32_usbhs_ep0_prepare();
 
     USBHS_DEVICE->CONTROL |= USBHS_DEV_PU_EN;
 
@@ -97,9 +126,17 @@ int usbd_set_remote_wakeup(uint8_t busid)
     return -1;
 }
 
+/* 实际枚举速度以 SPEED_TYPE 为准 (WCH 编码: 0x00=FS, 0x01=HS)。
+ * FS 回退时 usbd core 会以 USB_SPEED_FULL 回调描述符接口, 应用须按速度
+ * 返回对应 MPS 的配置描述符 (HS 512 / FS 64 各一份, other speed 描述符
+ * 必须用 USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT, bDescriptorType=0x07) */
 uint8_t usbd_get_port_speed(uint8_t busid)
 {
-    return USB_SPEED_HIGH;
+    uint8_t speed = USBHS_DEVICE->SPEED_TYPE & USBSPEED_MASK;
+    if (speed == 0x01) {
+        return USB_SPEED_HIGH;
+    }
+    return USB_SPEED_FULL;
 }
 
 int usbd_ep_open(uint8_t busid, const struct usb_endpoint_descriptor *ep)
@@ -285,11 +322,36 @@ void USBD_IRQHandler(uint8_t busid)
 
     intflag = USBHS_DEVICE->INT_FG;
 
+    /* 事件按因果序处理: 总线复位最优先(丢弃全部在途状态),
+     * SETUP 先于其数据/状态阶段的 TRANSFER 事件分发 */
+    if (intflag & USBHS_DETECT_FLAG) {
+        USBHS_DEVICE->INT_FG = USBHS_DETECT_FLAG;
+
+        memset(&g_ch32_usbhs_udc, 0, sizeof(struct ch32_usbhs_udc));
+        ch32_usbhs_ep0_prepare();
+
+        for (uint8_t ep_idx = 1; ep_idx < USB_NUM_BIDIR_ENDPOINTS; ep_idx++) {
+            USB_SET_TX_LEN(ep_idx, 0);
+            USB_SET_TX_CTRL(ep_idx, USBHS_EP_T_AUTOTOG | USBHS_EP_T_RES_NAK); // autotog does not work
+            USB_SET_RX_CTRL(ep_idx, USBHS_EP_R_AUTOTOG | USBHS_EP_R_RES_NAK);
+            epx_tx_data_toggle[ep_idx - 1] = false;
+        }
+
+        usbd_event_reset_handler(0);
+        ch32_usbhs_ep0_prepare();
+    }
+
+    if (intflag & USBHS_SETUP_FLAG) {
+        USBHS_DEVICE->INT_FG = USBHS_SETUP_FLAG;
+        /* 规范要求 SETUP 包之后的首个数据包为 DATA1 */
+        USBHS_DEVICE->UEP0_TX_CTRL = USBHS_EP_T_RES_NAK | USBHS_EP_T_TOG_1;
+        USBHS_DEVICE->UEP0_RX_CTRL = USBHS_EP_R_RES_NAK | USBHS_EP_R_TOG_1;
+        usbd_event_ep0_setup_complete_handler(0, (uint8_t *)&g_ch32_usbhs_udc.setup);
+    }
+
     if (intflag & USBHS_TRANSFER_FLAG) {
         ep_idx = (USBHS_DEVICE->INT_ST) & MASK_UIS_ENDP;
         token = (((USBHS_DEVICE->INT_ST) & MASK_UIS_TOKEN) >> 4) & 0x03;
-
-        USBHS_DEVICE->INT_FG = USBHS_TRANSFER_FLAG;
 
         if (token == PID_IN) {
             USB_SET_TX_CTRL(ep_idx, (USB_GET_TX_CTRL(ep_idx) & ~(USBHS_EP_T_RES_MASK | USBHS_EP_T_TOG_MASK)) | USBHS_EP_T_RES_NAK | USBHS_EP_T_TOG_0);
@@ -388,39 +450,29 @@ void USBD_IRQHandler(uint8_t busid)
                 }
             }
         }
+
+        /* 传输标志在处理完后清除: 处理期间新完成的事件保持置位 */
+        USBHS_DEVICE->INT_FG = USBHS_TRANSFER_FLAG;
     }
 
-    if (intflag & USBHS_SETUP_FLAG) {
-        USBHS_DEVICE->INT_FG = USBHS_SETUP_FLAG;
-        usbd_event_ep0_setup_complete_handler(0, (uint8_t *)&g_ch32_usbhs_udc.setup);
-    }
-
-    if (intflag & USBHS_DETECT_FLAG) {
-        USBHS_DEVICE->INT_FG = USBHS_DETECT_FLAG;
-
-        USBHS_DEVICE->ENDP_CONFIG = USBHS_EP0_T_EN | USBHS_EP0_R_EN;
-
-        USBHS_DEVICE->UEP0_TX_LEN = 0;
-        USBHS_DEVICE->UEP0_TX_CTRL = USBHS_EP_T_RES_NAK;
-
-        ep0_tx_data_toggle = true;
-        ep0_rx_data_toggle = true;
-
-        for (uint8_t ep_idx = 1; ep_idx < USB_NUM_BIDIR_ENDPOINTS; ep_idx++) {
-            USB_SET_TX_LEN(ep_idx, 0);
-            USB_SET_TX_CTRL(ep_idx, USBHS_EP_T_AUTOTOG | USBHS_EP_T_RES_NAK); // autotog does not work
-            USB_SET_RX_CTRL(ep_idx, USBHS_EP_R_AUTOTOG | USBHS_EP_R_RES_NAK);
-            epx_tx_data_toggle[ep_idx - 1] = false;
+    if (intflag & USBHS_SUSPEND_FLAG) {
+        USBHS_DEVICE->INT_FG = USBHS_SUSPEND_FLAG;
+        if (USBHS_DEVICE->MIS_ST & USBHS_SUSPEND) {
+            usbd_event_suspend_handler(0);
+        } else {
+            usbd_event_resume_handler(0);
         }
-
-        memset(&g_ch32_usbhs_udc, 0, sizeof(struct ch32_usbhs_udc));
-        usbd_event_reset_handler(0);
-        USBHS_DEVICE->UEP0_DMA = (uint32_t)&g_ch32_usbhs_udc.setup;
-        USBHS_DEVICE->UEP0_RX_CTRL = USBHS_EP_R_RES_ACK;
     }
 }
 
-void USBHS_IRQHandler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
+/* interrupt("WCH-Interrupt-fast") 使用 HPE 硬件压栈, 仅适用于中断落在
+ * 硬件压栈区的配置; 若 USBHS 中断优先级位于 8 级软件压栈区(如 pri=0),
+ * 须在 usb_config.h 定义 USB_CH32_USBHS_IRQ_SW_STACK 改用软件压栈 */
+#ifdef USB_CH32_USBHS_IRQ_SW_STACK
+#define CH32_USBHS_IRQ_ATTR __attribute__((interrupt()))
+#else
+#define CH32_USBHS_IRQ_ATTR __attribute__((interrupt("WCH-Interrupt-fast")))
+#endif
 void USBHS_IRQHandler(void)
 {
     extern void USBD_IRQHandler(uint8_t busid);
