@@ -93,7 +93,7 @@
 | CORE-26 | core/usbd_core.c:999 | RESET 事件直接解引用 `device_descriptor_callback()` 返回值，断言关闭时 NULL deref |
 | CORE-27 | core/usbh_core.c:769-777 | `usbh_get_string_desc` 奇数 bLength 时循环写入数比检查值多 1（极小 output_len 时 1 字节溢出） |
 | CORE-28 | common/usb_util.h:123-128 | `LO_BYTE/HI_BYTE` 宏参数未括号，`LO_BYTE(a|b)` 优先级错 |
-| CORE-35 | core/usbd_core.c:938-954（notify_handler） | `usbd_class_event_notify_handler` 把一切非 NULL `arg` 一律当作 `struct usb_interface_descriptor*` 解引用做接口过滤。当前上游只有 SET_INTERFACE 传 arg 故未触发，但 API 契约脆弱：任何事件带非描述符 arg（如端点号）即越界读。USBTMC 扩展（CH32_USBTMC 项目）已验证更稳妥写法：仅 `event == USBD_EVENT_SET_INTERFACE` 时按描述符过滤，其余事件直接广播
+| CORE-35 | core/usbd_core.c:938-954（notify_handler） | `usbd_class_event_notify_handler` 把一切非 NULL `arg` 一律当作 `struct usb_interface_descriptor*` 解引用做接口过滤。当前上游只有 SET_INTERFACE 传 arg 故未触发，但 API 契约脆弱：任何事件带非描述符 arg（如端点号）即越界读。USBTMC 扩展（CH32_USBTMC 项目）已验证更稳妥写法：仅 `event == USBD_EVENT_SET_INTERFACE` 时按描述符过滤，其余事件直接广播。**【已修复】**（连同 SET/CLR_HALT 事件与 CLEAR/SET_FEATURE(ENDPOINT_HALT) 处的 notify 调用一起并入，取自 USBTMC 工程已验证补丁）
 | OSAL-21 | osal/usb_osal_freertos.c:167-172 | `__usb_timeout(TimerHandle_t*)` 回调签名与 `TimerCallbackFunction_t` 不符（按值传），靠指针宽度巧合工作 |
 | OSAL-22 | osal/usb_osal_zephyr.c:126-132 | `usb_osal_sem_delete` 先 take 后 free，仍有等待者时 UAF（zephyr 无 delete 语义，需文档化） |
 | OSAL-23 | osal/usb_osal_threadx.c:21-25,67-71,311-315 | 创建失败 `while(1)` 死等；`usb_osal_malloc` 用 `TX_WAIT_FOREVER` |
@@ -133,6 +133,7 @@
 | PORT-05 | port/ch32/ch32hs/usb_dc_usbhs.c（DETECT 块） | ✅ | 总线复位处理在 `usbd_event_reset_handler()` 之后才恢复 `UEP0_DMA`/`RX_CTRL`，存在窗口。应封装 `ch32_usbhs_ep0_prepare()`（ENDP_CONFIG=EP0、MAX_LEN、DMA、TX_LEN=0、TX NAK、RX ACK、toggle=true），在 reset handler 前后各调一次（幂等，后者恢复被 `usbd_ep_open` 覆盖的 NAK/ACK）；`ENDP_CONFIG` 用全赋值清所有 EP 使能符合复位语义 |
 | PORT-06 | port/ch32/ch32hs/usb_dc_usbhs.c（INT_EN） | ✅ | 未使能 `USBHS_SUSPEND_EN`，挂起/恢复事件不上报 → core 的 `is_suspend` 永远 false，remote wakeup 判定失效。修法：SUSPEND_FLAG 块内按 `MIS_ST & USBHS_SUSPEND` 区分挂起（bit2,=UMS_SUSPEND）/恢复后分别调 `usbd_event_suspend/resume_handler`（ch32fs 端口同款模式） |
 | PORT-07 | port/ch32/ch32hs/usb_dc_usbhs.c:423 | ✅ | `USBHS_IRQHandler` 用 `interrupt("WCH-Interrupt-fast")`（HPE 硬件压栈）。WCH QingKe V4 约束 HPE 仅适用于硬件压栈区中断；USBHS pri=0 落在 8 级软件压栈区时应改普通 `interrupt()`。**项目相关配置**：移植时建议保留上游默认、以宏开关切换，不要无脑改 |
+| PORT-08 | port/ch32/ch32hs/usb_dc_usbhs.c:476-479 | ✅ | **移植回归（外部 agent 机器码级实证）**：`CH32_USBHS_IRQ_ATTR` 宏定义后未贴到 `USBHS_IRQHandler`（同步重构时把带属性的声明行弄丢）→ ISR 被编译成普通函数，epilogue 走 `ret` 尾调用而非 `mret`，首次 USBHS 中断后 mstatus.MIE 停 0，全局中断永久失效，症状为 "Device Descriptor Request Failed"。已修复（属性贴声明，与上游同构），并把"属性必须落在 ISR 声明/定义上"写成行内注释。**全库 IRQ 属性审计**：仅 ch32fs/ch58x/ch32hs 为 RISC-V 需要属性（ch32fs/ch58x 本就正确），其余 *_IRQHandler 均 ARM Cortex-M 端口（向量表直引普通函数，无需属性），无同类问题 |
 
 ## 上游已修复完整性核查（首次审查附带结论）
 
@@ -154,6 +155,8 @@
 
 - 2026-09-06：首次全库审查（基线 1fd876d），登记 CORE-01~03/24~28（core+common）、OSAL-01~26（osal）、CLS-01~44（类驱动）；三条上游修复完整性核查结论。
 - 2026-09-06：并入用户 EmoeDAQ 项目（CH32V30x_USB_AD7175）的本地修正核查结论，新增 PORT-01~07（port/ch32/ch32hs，已逐条对照 WCH 官方头文件/例程核实；该项目的修正在其工程内验证有效，且对应问题在 1fd876d 基线上全部仍存在，待移植）。
+- 2026-09-06：外部 agent 发现 PORT 移植回归（CH32_USBHS_IRQ_ATTR 未贴函数，PORT-08），已修复并完成全库 IRQ 属性审计；
+  CORE-35 连同 SET/CLR_HALT 扩展（USBTMC 工程补丁）并入 core。
 - 2026-09-06：PORT-01~07 移植入 fork（port/ch32/ch32hs；含 EP9 寄存器位修正、FORCE_RST 初始化序列、
   SPEED_TYPE 动态测速与 FS 回退、EP0 prepare、ISR 因果序重排 + SETUP 强制 DATA1、挂起/恢复事件、IRQ 压栈方式宏开关）。
 - 2026-09-06：核对用户 USBTMC 扩展项目（CH32_USBTMC，usbd_tmc 类驱动 + core SET/CLR_HALT 扩展，基线 v1.5.0）：扩展实现整体合理，其 core notify_handler 修正反哺本表 CORE-35。TMC 驱动自身的问题（临界区宏跨编译单元失效、other_speed 描述符类型 0x02 等）记录在该项目，不属于本 fork 代码。

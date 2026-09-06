@@ -473,6 +473,9 @@ void USBD_IRQHandler(uint8_t busid)
 #else
 #define CH32_USBHS_IRQ_ATTR __attribute__((interrupt("WCH-Interrupt-fast")))
 #endif
+/* 属性必须落在声明(或定义)上: 缺失时 GCC 按普通函数编译 ISR, epilogue 以 ret
+ * 而非 mret 结尾, 首次中断后 mstatus.MIE 停在 0, 全局中断永久失效 */
+void USBHS_IRQHandler(void) CH32_USBHS_IRQ_ATTR;
 void USBHS_IRQHandler(void)
 {
     extern void USBD_IRQHandler(uint8_t busid);
