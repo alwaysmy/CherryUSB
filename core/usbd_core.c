@@ -702,6 +702,7 @@ static bool usbd_std_endpoint_req_handler(uint8_t busid, struct usb_setup_packet
                 USB_LOG_ERR("ep:%02x clear halt\r\n", ep);
 
                 usbd_ep_clear_stall(busid, ep);
+                usbd_class_event_notify_handler(busid, USBD_EVENT_CLR_HALT, (void *)(uintptr_t)ep);
                 break;
             } else {
                 ret = false;
@@ -713,6 +714,7 @@ static bool usbd_std_endpoint_req_handler(uint8_t busid, struct usb_setup_packet
                 USB_LOG_ERR("ep:%02x set halt\r\n", ep);
 
                 usbd_ep_set_stall(busid, ep);
+                usbd_class_event_notify_handler(busid, USBD_EVENT_SET_HALT, (void *)(uintptr_t)ep);
             } else {
                 ret = false;
             }
@@ -940,15 +942,17 @@ static void usbd_class_event_notify_handler(uint8_t busid, uint8_t event, void *
     for (uint8_t i = 0; i < g_usbd_core[busid].intf_offset; i++) {
         struct usbd_interface *intf = g_usbd_core[busid].intf[i];
 
-        if (arg) {
-            struct usb_interface_descriptor *desc = (struct usb_interface_descriptor *)arg;
-            if (intf && intf->notify_handler && (desc->bInterfaceNumber == (intf->intf_num))) {
-                intf->notify_handler(busid, event, arg);
+        if (intf && intf->notify_handler) {
+            /* Only USBD_EVENT_SET_INTERFACE carries an interface descriptor in arg,
+             * which is delivered to the class owning that interface. Other events
+             * may carry a non-pointer arg (e.g. endpoint address of SET/CLR_HALT). */
+            if (event == USBD_EVENT_SET_INTERFACE && arg) {
+                struct usb_interface_descriptor *desc = (struct usb_interface_descriptor *)arg;
+                if (desc->bInterfaceNumber != intf->intf_num) {
+                    continue;
+                }
             }
-        } else {
-            if (intf && intf->notify_handler) {
-                intf->notify_handler(busid, event, arg);
-            }
+            intf->notify_handler(busid, event, arg);
         }
     }
 }

@@ -8,6 +8,19 @@
 ## [Unreleased]
 
 ### Fixed
+- **port/ch32/ch32hs**：修复 `76faec6` 引入的移植回归——`CH32_USBHS_IRQ_ATTR` 宏定义后未贴到
+  `USBHS_IRQHandler`（外部 agent 在 CH32V307 机器码级实证：ISR 被编译成普通函数，epilogue 以
+  `ret` 而非 `mret` 结尾，首次中断后全局中断永久失效，枚举报 "Device Descriptor Request Failed"）。
+  现属性贴在声明上（与上游同构），并完成全库 `*_IRQHandler` 属性审计（仅 WCH RISC-V 端口需要
+  interrupt 属性，ch32fs/ch58x 本就正确，ARM 端口无需，无同类问题）。
+- **core（CORE-35）**：`usbd_class_event_notify_handler` 不再把一切非 NULL `arg` 当
+  `usb_interface_descriptor*` 解引用——仅 `USBD_EVENT_SET_INTERFACE` 按描述符过滤，其余事件直接
+  广播（补丁取自 USBTMC 工程已验证实现）。
+
+### Added
+- **core**：新增 `USBD_EVENT_SET_HALT` / `USBD_EVENT_CLR_HALT` 事件，并在
+  CLEAR_FEATURE / SET_FEATURE(ENDPOINT_HALT) 处通知类驱动（arg = 端点地址），
+  供 USBTMC 等需要感知主机 halt 操作的类驱动使用（取自 USBTMC 工程已验证实现）。
 - **port/ch32/ch32hs 全量修复**（来源：EmoeDAQ 项目现场验证的修正，批判性复核后移植，详见 `docs/REVIEW.md` PORT-01~07）：
   - 寄存器头 `USBHS_EP9_T_TYP` 位定义错误（1<<8 与 EP8 冲突，应为 1<<9）。
   - `usb_dc_init` 补齐 WCH 官方 FORCE_RST 复位序列与 PHY 稳定延时，消除间歇性枚举失败。
