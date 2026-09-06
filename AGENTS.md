@@ -40,6 +40,16 @@
 - 当前基线：upstream master `1fd876d`（2026-09-02，v1.6.1 之后，含 PR#440 修复）。
   同步前先更新 `docs/UPSTREAM_STATUS.md`。
 
+## 分支策略
+
+- `master`：只放与上游可对齐的通用修复；保持随时可 merge 上游/被上游 cherry-pick 的状态。
+- **厂商专属补丁放厂商分支，不合入 master**（2026-09-07 决策）。现有：`gd32-dwc2`
+  （PORT-GD01，GD 系列 DWC2 hw_params 兜底，GD32F350G8 板级实证，PORT-GD01 明细在该
+  分支的 docs/REVIEW.md）。原因：这类补丁依赖厂商专有判据/专属数值，泛化门控（如
+  `snpsid < 0x4F54420A`，上游只拿它选软复位方式）会误伤其它借用 DWC2 IP 且内核版本
+  低于 4.20a 的芯片。若将来要合入，前置条件：门控换成厂商专属识别、树内 glue 补齐
+  `dwc2_get_user_params`（当前 usb_glue_gd.c 仍是带 #error 的模板）、参数表逐型号适配。
+
 ## 验证手段
 
 无主机侧单测。可用：
