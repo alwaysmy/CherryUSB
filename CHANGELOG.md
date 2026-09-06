@@ -8,6 +8,13 @@
 ## [Unreleased]
 
 ### Fixed
+- **port/dwc2（PORT-GD01，分支 `gd32-dwc2`）**：GD 系列 DWC2 不实现 GSNPSID/GHWCFG1-4
+  自描述寄存器（实测 GD32F350 恒读 GSNPSID=0 / GHWCFG2=0x40 / GHWCFG3=0x7ff），即 README
+  "无法读取 DWC2 配置信息，暂不支持 GD 系列"的原因。`dwc2_get_hwparams()` 得 num_dev_ep=0：
+  枚举能走到 SET_CONFIGURATION，打开首个类端点即 `USB_ASSERT_MSG(ep_idx < num_dev_ep + 1)`
+  死循环。修复：snpsid 无效时按 GD32F3x0 手册/官方库填充 hw_params，并跳过"TX FIFO 上电值"
+  自检（GD 的 DIEPTXF 上电值为随机小值）。真 DWC2 路径完全不变。GD32F350G8 板级实证
+  （枚举 + CDC bulk 回环）。**在 gd32-dwc2 分支维护，master 保持与上游对齐**。
 - **port/ch32/ch32hs**：修复 `76faec6` 引入的移植回归——`CH32_USBHS_IRQ_ATTR` 宏定义后未贴到
   `USBHS_IRQHandler`（外部 agent 在 CH32V307 机器码级实证：ISR 被编译成普通函数，epilogue 以
   `ret` 而非 `mret` 结尾，首次中断后全局中断永久失效，枚举报 "Device Descriptor Request Failed"）。

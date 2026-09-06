@@ -494,6 +494,24 @@ int usb_dc_init(uint8_t busid)
     USB_LOG_INFO("GHWCFG4:%08x\r\n", (unsigned int)USB_OTG_GLB->GHWCFG4);
 
     dwc2_get_hwparams(USBD_BASE, &g_dwc2_udc[busid].hw_params);
+    /* [vendor-patch GD32] GD 系列 DWC2 未实现 GSNPSID/GHWCFG1-4 自描述寄存器
+     * （即 CherryUSB README "无法读取 DWC2 配置信息，暂不支持 GD 系列"的原因）：
+     * 实测 GSNPSID=0、GHWCFG2=0x40(num_dev_ep=0)、GHWCFG3=0x7ff。
+     * 按 GD32F3x0 用户手册与官方 USBFS 库补齐设备模式所需参数，
+     * 否则 num_dev_ep=0 会在 set-config 打开类端点时触发断言死循环。 */
+    if (g_dwc2_udc[busid].hw_params.snpsid < 0x4F54420AU) {
+        struct dwc2_hw_params *hw = &g_dwc2_udc[busid].hw_params;
+        hw->num_dev_ep = 3;              /* EP0 + 3 对端点（4 IN + 4 OUT） */
+        hw->dev_ep_dirs = 0xAAAAAAAAUL;  /* 每端点 2'b10 = IN+OUT 双向 */
+        hw->fs_phy_type = 1;             /* 专用 FS PHY */
+        hw->hs_phy_type = 0;             /* 无 HS PHY -> 枚举为全速 */
+        hw->arch = 0;                    /* Slave 模式（device_dma_enable=false） */
+        hw->enable_dynamic_fifo = 0;
+        hw->max_transfer_size = 0x7FF;   /* GHWCFG3 实际读值 */
+        hw->max_packet_count = 0x3FF;
+        hw->total_fifo_size = 320;       /* = USBFS_MAX_FIFO_WORDLEN */
+        hw->num_dev_in_eps = 4;          /* EP0 IN + IN1~3 */
+    }
     dwc2_get_user_params(USBD_BASE, &g_dwc2_udc[busid].user_params);
 
     if (g_dwc2_udc[busid].user_params.phy_utmi_width == 0) {
@@ -521,15 +539,20 @@ int usb_dc_init(uint8_t busid)
 
     USB_ASSERT_MSG((USB_OTG_GLB->GRXFSIZ & 0xffff) >= g_dwc2_udc[busid].user_params.device_rx_fifo_size,
                    "device_rx_fifo_size cannot be larger than power_on_value %u", (unsigned int)(USB_OTG_GLB->GRXFSIZ & 0xffff));
-    for (uint8_t i = 0; i < (g_dwc2_udc[busid].hw_params.num_dev_ep + 1); i++) {
-        uint16_t reset_txfifo_size;
-        if (i == 0) {
-            reset_txfifo_size = USB_OTG_GLB->DIEPTXF0_HNPTXFSIZ >> 16 & 0xffff;
-        } else {
-            reset_txfifo_size = USB_OTG_GLB->DIEPTXF[i - 1] >> 16 & 0xffff;
+    /* [vendor-patch GD32] "上电 FIFO 值"自检只对真 DWC2 有意义（GD 的 DIEPTXF
+     * 上电值为随机小值，如 DIEPTXF1=8 字），GD 跳过该自检，由后续
+     * dwc2_set_txfifo 直接写入正确配置 */
+    if (g_dwc2_udc[busid].hw_params.snpsid >= 0x4F54420AU) {
+        for (uint8_t i = 0; i < (g_dwc2_udc[busid].hw_params.num_dev_ep + 1); i++) {
+            uint16_t reset_txfifo_size;
+            if (i == 0) {
+                reset_txfifo_size = USB_OTG_GLB->DIEPTXF0_HNPTXFSIZ >> 16 & 0xffff;
+            } else {
+                reset_txfifo_size = USB_OTG_GLB->DIEPTXF[i - 1] >> 16 & 0xffff;
+            }
+            USB_ASSERT_MSG(reset_txfifo_size >= g_dwc2_udc[busid].user_params.device_tx_fifo_size[i],
+                           "device_tx_fifo_size[%u] cannot be larger than power_on_value %u", i, reset_txfifo_size);
         }
-        USB_ASSERT_MSG(reset_txfifo_size >= g_dwc2_udc[busid].user_params.device_tx_fifo_size[i],
-                       "device_tx_fifo_size[%u] cannot be larger than power_on_value %u", i, reset_txfifo_size);
     }
 
     if (g_dwc2_udc[busid].user_params.b_session_valid_override) {
