@@ -32,7 +32,27 @@
 #define CONFIG_USB_ALIGN_SIZE 4
 #endif
 
-/* attribute data into no cache ram */
+/* attribute data into no cache ram.
+ *
+ * 注意: 目标链接脚本必须显式定义 `.noncacheable` 输出段, 否则它是孤儿段:
+ * 启动的数据拷贝环(_data_lma -> _edata)与 BSS 清零环(_sbss -> _ebss)都不覆盖它,
+ * 带初值的静态变量初始化丢失、静态零初始化预期落空, 板上实测可致枚举半途死/行为飘忽。
+ * 按目标三选一:
+ *  1) 无 D-cache 且不使用 MPU 的目标(如 CH32V30x)可直接置空:
+ *        #define USB_NOCACHE_RAM_SECTION
+ *  2) 需要初始化语义(变量带初值)时, 在链接脚本 .data 输出段内收编(_edata 必须置于其后),
+ *     以下片段已板级验证:
+ *            . = ALIGN(4);
+ *            PROVIDE( _snoncacheable = .);
+ *            *(.noncacheable)
+ *            *(.noncacheable.*)
+ *            . = ALIGN(4);
+ *            PROVIDE( _enoncacheable = .);
+ *            PROVIDE( _edata = .);
+ *        } >RAM AT>FLASH
+ *  3) 纯缓冲(不带初值、无需上电清零)可改用链接脚本提供的非初始化段, 如 HPM SDK 的
+ *     ".noncacheable.non_init"(无需 Flash LMA 与拷贝), 语义与 2) 互斥, 勿混用。
+ */
 #define USB_NOCACHE_RAM_SECTION __attribute__((section(".noncacheable")))
 
 /* use usb_memcpy default for high performance but cost more flash memory.

@@ -8,6 +8,9 @@
 ## [Unreleased]
 
 ### Fixed
+- **TODO-01/TODO-02（分支 `fix/todo-docs`）**：`cherryusb_config_template.h` 的
+  `USB_NOCACHE_RAM_SECTION` 注释补全孤儿段风险与三选一处理指引（置空 / 并入 .data 的
+  已验证 LD 片段 / non_init 语义）；AGENTS.md 验证手段补 ISR 软压栈栈深 ≥4KB 要求。
 - **port/ch32/ch32hs**：修复 `76faec6` 引入的移植回归——`CH32_USBHS_IRQ_ATTR` 宏定义后未贴到
   `USBHS_IRQHandler`（外部 agent 在 CH32V307 机器码级实证：ISR 被编译成普通函数，epilogue 以
   `ret` 而非 `mret` 结尾，首次中断后全局中断永久失效，枚举报 "Device Descriptor Request Failed"）。
