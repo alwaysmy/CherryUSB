@@ -33,6 +33,10 @@
     `USB_CH32_USBHS_IRQ_SW_STACK` 时切换为软件压栈（USBHS 优先级落在 8 级软件压栈区时必须）。
 
 ### Added
+- `docs/REVIEW.md` 新增 **TODO（待修）** 一节：核对 USBTMC 工程上板实测问题清单后，
+  立项 TODO-01（`.noncacheable` 孤儿段致 core 状态/DMA 缓冲不初始化不清零，含参考 LD 片段与
+  三种修复方向）、TODO-02（ISR 软压栈栈深 ≥4KB 文档化）、TODO-03（HS 经三级 Hub 链 BABBLE
+  观察项，速率编码已由 WCH 官方头排除）；其 P0/P1/P2 经核对在 master 已修（b7dd9ee/580ccfd）。
 - `AGENTS.md`：fork 维护规则（禁止主动提 PR、最小 diff、修复三步流程、上游同步策略）。
 - `docs/REVIEW.md`：首次全库代码审查发现总表（CORE/OSAL/CLS 三个系列共 100 余条，
   含 8 条 P0），并附上游近期修复的完整性核查结论。

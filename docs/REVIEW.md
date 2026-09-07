@@ -151,12 +151,48 @@
 3. **Wave 3（P2 批量）**：osal ISR 守卫补全（OSAL-06~10）、单位换算（OSAL-11/12）、usb_list.h 三处（OSAL-16~18，顺手修）。
 4. P3 择机 / 随相关文件修改顺带修。
 
+## TODO（待修，按优先级）
+
+> 2026-09-07 由 USBTMC 工程《CherryUSB_Fork待修问题清单》（CH32V307RCT6 + 三级 Hub 链上板实测）核对后建立。
+> 该清单 P0（IRQ 属性丢失）/P1（SET/CLR_HALT 事件）/P2（notify_handler arg 解引用）经逐条核对，
+> **master 已由 b7dd9ee 与 580ccfd 修复**，不再列为待办；其"实测确认有效"一节（FORCE_RST 序列、
+> ep0_prepare、SPEED_TYPE 动态测速、ISR 因果序、SETUP 后 TOG_1）独立验证了 PORT-01~07 的修复效果。
+
+### TODO-01（P1）`.noncacheable` 孤儿段：core 状态与 DMA 缓冲不初始化/不清零
+- 位置：`cherryusb_config_template.h:36`（宏向所有目标无条件下发）+ `core/usbd_core.c:40`
+  （`g_usbd_core` 整段 ~0x3FC，含 ep0 状态/intf 表/tx_rx_msg 回调表）+ `core/usbh_core.c:21-22`
+  （ep0_request_buffer / g_setup_buffer）。
+- 问题：目标链接脚本未定义 `.noncacheable` 输出段时成为孤儿段（USBTMC 板上实测落在
+  `_edata` 与 `_sbss` 之间）：启动拷贝环（`_data_lma→_edata`）与 BSS 清零环均不覆盖。
+  后果：带初值的 NOCACHE 静态变量初始化丢失（EmoeDAQ 实测 dummy_tx 读回 0）；静态零初始化
+  预期落空（板上表现为"枚举半途死、行为飘忽"）。CH32V30x 无 D-cache，该段无硬件收益纯风险。
+- 缓解因素（如实记录）：`usbd_desc_register` 运行时 memset `g_usbd_core`
+  （usbd_core.c:1222），标准初始化顺序下设备核心态会被清零；但该保护依赖用户调用顺序，
+  host 侧缓冲与任何用户自带的带初值 NOCACHE 变量无此保护。
+- 修复方向（待拍板后实施）：① 模板 36 行加风险注释并附参考 LD 片段（并入 `.data` 的
+  VMA/LMA 对，`_edata` 置于段后——EmoeDAQ Link.ld:154-164 已板级验证）；② 注明纯缓冲场景
+  可用 HPM 式 `.noncacheable.non_init`（无需初始化语义，与 ① 互斥）；③ 注明无 D-cache 且
+  不用 MPU 的目标可直接置空宏。
+
+### TODO-02（P3，纯文档）ISR 软压栈场景栈深要求
+`USB_CH32_USBHS_IRQ_SW_STACK`（USBHS pri=0 落软件压栈区）走 C 栈且中断内存在类驱动/SCPI
+级调用深度，USBTMC 实测 2KB 栈不足、≥4KB 安全。在移植文档/AGENTS.md 验证手段一节注明。
+
+### TODO-03（观察项，不立 bug）HS 经三级 Hub 链 BABBLE
+USBTMC 板上 HS 模式经三级 Hub 链观察到主机侧 `USBD_STATUS_BABBLE_DETECTED`（控制 IN 数据
+阶段 0 字节），同板/线/链强制 FS 完全正常。速率编码本身已由 WCH 官方头核实无误
+（`Peripheral/ch32v30x_usb.h`：USBHS_USB_SPEED_HIGH=0x01），PORT-04 不成立为 bug；
+嫌疑为长 Hub 链 HS 信号完整性/拓扑问题。留观，待可复现环境再查。
+
 ## 变更记录
 
 - 2026-09-06：首次全库审查（基线 1fd876d），登记 CORE-01~03/24~28（core+common）、OSAL-01~26（osal）、CLS-01~44（类驱动）；三条上游修复完整性核查结论。
 - 2026-09-06：并入用户 EmoeDAQ 项目（CH32V30x_USB_AD7175）的本地修正核查结论，新增 PORT-01~07（port/ch32/ch32hs，已逐条对照 WCH 官方头文件/例程核实；该项目的修正在其工程内验证有效，且对应问题在 1fd876d 基线上全部仍存在，待移植）。
 - 2026-09-06：外部 agent 发现 PORT 移植回归（CH32_USBHS_IRQ_ATTR 未贴函数，PORT-08），已修复并完成全库 IRQ 属性审计；
   CORE-35 连同 SET/CLR_HALT 扩展（USBTMC 工程补丁）并入 core。
+- 2026-09-07：核对 USBTMC 工程上板实测《CherryUSB_Fork待修问题清单》：P0/P1/P2 确认已修（b7dd9ee/580ccfd），
+  新立 TODO-01（.noncacheable 孤儿段）、TODO-02（软压栈栈深文档）、TODO-03（HS 长链 BABBLE 观察项）；
+  同日其上板调试独立验证 PORT-01~07 修复有效。
 - 2026-09-06：PORT-01~07 移植入 fork（port/ch32/ch32hs；含 EP9 寄存器位修正、FORCE_RST 初始化序列、
   SPEED_TYPE 动态测速与 FS 回退、EP0 prepare、ISR 因果序重排 + SETUP 强制 DATA1、挂起/恢复事件、IRQ 压栈方式宏开关）。
 - 2026-09-06：核对用户 USBTMC 扩展项目（CH32_USBTMC，usbd_tmc 类驱动 + core SET/CLR_HALT 扩展，基线 v1.5.0）：扩展实现整体合理，其 core notify_handler 修正反哺本表 CORE-35。TMC 驱动自身的问题（临界区宏跨编译单元失效、other_speed 描述符类型 0x02 等）记录在该项目，不属于本 fork 代码。
