@@ -21,6 +21,9 @@
   广播（补丁取自 USBTMC 工程已验证实现）。
 
 ### Added
+- **CH32 适配（本分支，TODO-01/TODO-02 的 CH32 部分）**：`port/ch32/README.md` 补"移植注意"——
+  NOCACHE 段在无 D-cache 的 CH32 上置空宏的推荐、孤儿段风险与保留段方案、ISR 软压栈栈深
+  ≥4KB 要求、已知问题索引；`usb_dc_usbhs.c` 的 SW_STACK 注释同步栈深要求。
 - **core**：新增 `USBD_EVENT_SET_HALT` / `USBD_EVENT_CLR_HALT` 事件，并在
   CLEAR_FEATURE / SET_FEATURE(ENDPOINT_HALT) 处通知类驱动（arg = 端点地址），
   供 USBTMC 等需要感知主机 halt 操作的类驱动使用（取自 USBTMC 工程已验证实现）。
@@ -34,8 +37,6 @@
   - 使能挂起/恢复中断并按 `MIS_ST` 区分上报（原端口完全不上报 suspend/resume，remote wakeup 判定失效）。
   - `USBHS_IRQHandler` 压栈方式改为可配置：默认保持上游 `WCH-Interrupt-fast`（HPE），定义
     `USB_CH32_USBHS_IRQ_SW_STACK` 时切换为软件压栈（USBHS 优先级落在 8 级软件压栈区时必须）。
-
-### Added
 - `docs/REVIEW.md` 新增 **TODO（待修）** 一节：核对 USBTMC 工程上板实测问题清单后，
   立项 TODO-01（`.noncacheable` 孤儿段致 core 状态/DMA 缓冲不初始化不清零，含参考 LD 片段与
   三种修复方向）、TODO-02（ISR 软压栈栈深 ≥4KB 文档化）、TODO-03（HS 经三级 Hub 链 BABBLE

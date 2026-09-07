@@ -467,7 +467,8 @@ void USBD_IRQHandler(uint8_t busid)
 
 /* interrupt("WCH-Interrupt-fast") 使用 HPE 硬件压栈, 仅适用于中断落在
  * 硬件压栈区的配置; 若 USBHS 中断优先级位于 8 级软件压栈区(如 pri=0),
- * 须在 usb_config.h 定义 USB_CH32_USBHS_IRQ_SW_STACK 改用软件压栈 */
+ * 须在 usb_config.h 定义 USB_CH32_USBHS_IRQ_SW_STACK 改用软件压栈
+ * (软压栈下寄存器保存与中断内调用链全走 C 栈, 栈深需 >=4KB, 实测 2KB 不足) */
 #ifdef USB_CH32_USBHS_IRQ_SW_STACK
 #define CH32_USBHS_IRQ_ATTR __attribute__((interrupt()))
 #else
