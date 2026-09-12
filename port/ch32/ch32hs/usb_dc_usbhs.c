@@ -208,9 +208,20 @@ int usbd_ep_clear_stall(uint8_t busid, const uint8_t ep)
     uint8_t ep_idx = USB_EP_GET_IDX(ep);
 
     if (USB_EP_DIR_IS_OUT(ep)) {
-        USB_SET_RX_CTRL(ep_idx, USBHS_EP_R_RES_ACK | USBHS_EP_R_TOG_0);
+        /* 恢复 open 时位型 (NAK|TOG_0|AUTOTOG): 重写整个寄存器而漏掉 AUTOTOG
+         * 会让 bulk-OUT 落入手动 TOG 恒等 DATA0 -> clear 后主机 DATA1 包被
+         * 硬件静默丢弃 -> 写挂死 (USBTMC Device Clear 根因)。RES 用 NAK 而非
+         * ACK: 类驱动随后 start_read 才置 ACK, 无已挂 DMA 缓冲时 ACK 会把
+         * 主机包收进陈旧缓冲 */
+        USB_SET_RX_CTRL(ep_idx, USBHS_EP_R_RES_NAK | USBHS_EP_R_TOG_0 | USBHS_EP_R_AUTOTOG);
     } else {
-        USB_SET_TX_CTRL(ep_idx, USBHS_EP_T_RES_NAK | USBHS_EP_T_TOG_0);
+        USB_SET_TX_CTRL(ep_idx, USBHS_EP_T_RES_NAK | USBHS_EP_T_TOG_0 | USBHS_EP_T_AUTOTOG);
+        if (ep_idx > 0) {
+            /* USB 2.0 9.1.1.6: clear stall 后数据 toggle 复位为 DATA0。
+             * 本端口 start_write 用软件 toggle 数组设起始 PID, 必须同步,
+             * 否则 STALL 恢复后 IN 传输起始 PID 错 -> 主机丢包/超时 */
+            epx_tx_data_toggle[ep_idx - 1] = false;
+        }
     }
     return 0;
 }

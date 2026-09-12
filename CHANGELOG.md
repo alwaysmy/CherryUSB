@@ -21,7 +21,13 @@
   广播（补丁取自 USBTMC 工程已验证实现）。
 
 ### Added
-- **CH32 适配（本分支，TODO-01/TODO-02 的 CH32 部分）**：`port/ch32/README.md` 补"移植注意"——
+- **port/ch32/ch32hs（PORT-09，本分支）**：修复 `usbd_ep_clear_stall` 整寄存器重写导致的
+  STALL 恢复后 bulk 永久挂死（USBTMC 工程 T2 上板实证）——① 恢复 open 位型
+  `NAK|TOG_0|AUTOTOG`（AUTOTOG 丢失会让 bulk-OUT 手动 TOG 恒 DATA0，主机 clear 后的
+  DATA1 被静默丢弃）；② TX 分支按 USB 2.0 §9.1.1.6 同步复位软件 toggle 数组（本端口
+  IN 起始 PID 由软件设定）。注意：该修复曾在对方工程被同步覆盖丢失过，每次同步 port
+  文件后必须 diff 复核两机制在位。
+- **CH32 适配（本分支，TODO-01/02 的 CH32 部分）**：`port/ch32/README.md` 补"移植注意"——
   NOCACHE 段在无 D-cache 的 CH32 上置空宏的推荐、孤儿段风险与保留段方案、ISR 软压栈栈深
   ≥4KB 要求、已知问题索引；`usb_dc_usbhs.c` 的 SW_STACK 注释同步栈深要求。
 - **core**：新增 `USBD_EVENT_SET_HALT` / `USBD_EVENT_CLR_HALT` 事件，并在

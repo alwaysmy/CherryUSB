@@ -40,6 +40,14 @@
 - 当前基线：upstream master `1fd876d`（2026-09-02，v1.6.1 之后，含 PR#440 修复）。
   同步前先更新 `docs/UPSTREAM_STATUS.md`。
 
+## 同步复核铁律
+
+从外部工程同步 port 文件后，**必须 diff 复核已知修复是否仍在位**（历史上发生过同步
+覆盖丢失）：
+- `port/ch32/ch32hs/usb_dc_usbhs.c` 的 `usbd_ep_clear_stall`：AUTOTOG 位型恢复（PORT-09①）
+  与 `epx_tx_data_toggle[]` 软件数组复位（PORT-09②）两机制缺一不可；
+  `USBHS_IRQHandler` 声明上的 `CH32_USBHS_IRQ_ATTR`（PORT-08）。
+
 ## 分支策略
 
 - `master`：只放与上游可对齐的通用修复；保持随时可 merge 上游/被上游 cherry-pick 的状态。
