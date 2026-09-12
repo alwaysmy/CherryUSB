@@ -169,14 +169,17 @@
 - 缓解因素（如实记录）：`usbd_desc_register` 运行时 memset `g_usbd_core`
   （usbd_core.c:1222），标准初始化顺序下设备核心态会被清零；但该保护依赖用户调用顺序，
   host 侧缓冲与任何用户自带的带初值 NOCACHE 变量无此保护。
-- 修复方向（待拍板后实施）：① 模板 36 行加风险注释并附参考 LD 片段（并入 `.data` 的
-  VMA/LMA 对，`_edata` 置于段后——EmoeDAQ Link.ld:154-164 已板级验证）；② 注明纯缓冲场景
-  可用 HPM 式 `.noncacheable.non_init`（无需初始化语义，与 ① 互斥）；③ 注明无 D-cache 且
-  不用 MPU 的目标可直接置空宏。
+- 修复方向：① 模板加风险注释并附参考 LD 片段；② 注明纯缓冲场景的 non_init 语义；③ 无
+  D-cache 且不用 MPU 的目标置空宏。
+- **状态（2026-09-07）：文档约束已实施**（模板注释三选一指引，分支 `fix/todo-docs`）；
+  CH32 专属适配指引在 `ch32-adapt` 分支（port/ch32/README.md）。代码级动作无（置空属用户
+  工程配置）。
 
 ### TODO-02（P3，纯文档）ISR 软压栈场景栈深要求
 `USB_CH32_USBHS_IRQ_SW_STACK`（USBHS pri=0 落软件压栈区）走 C 栈且中断内存在类驱动/SCPI
-级调用深度，USBTMC 实测 2KB 栈不足、≥4KB 安全。在移植文档/AGENTS.md 验证手段一节注明。
+级调用深度，USBTMC 实测 2KB 栈不足、≥4KB 安全。
+**状态（2026-09-07）：已文档化**（AGENTS.md 验证手段第 4 条 + `ch32-adapt` 分支的端口注释与
+port/ch32/README.md）。
 
 ### TODO-03（观察项，不立 bug）HS 经三级 Hub 链 BABBLE
 USBTMC 板上 HS 模式经三级 Hub 链观察到主机侧 `USBD_STATUS_BABBLE_DETECTED`（控制 IN 数据

@@ -63,6 +63,9 @@
 2. **配置矩阵编译冒烟**：改到 `#ifdef` 分支内的代码（如 `CONFIG_USBDEV_EP0_THREAD`）
    必须显式打开该宏编译验证——上游 CI 不覆盖所有配置组合，历史上在此翻过车。
 3. 有硬件时按 `embedded-test` skill 流程做板级回归（枚举 + 数据吞吐 + 反复插拔）。
+4. **栈深**：ch32hs 的 `USB_CH32_USBHS_IRQ_SW_STACK`（USBHS pri=0 软件压栈）变体下，
+   ISR 寄存器保存与中断内调用链（类驱动/SCPI 级）全走 C 栈，实测 2KB 不足、**≥4KB 安全**
+   （USBTMC 工程板上验证，TODO-02）。
 
 ## 审查关注模式（本仓库的历史高发 bug 类型）
 
