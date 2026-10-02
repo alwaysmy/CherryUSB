@@ -209,9 +209,15 @@ USBTMC 板上 HS 模式经三级 Hub 链观察到主机侧 `USBD_STATUS_BABBLE_D
 
 | ID | 级别 | 状态 | 位置与复现 |
 |---|---|---|---|
-| PORT-10 | P2 | open | `usbd_ep_is_stalled` 用 `ctrl & STALL` 判定，NAK=2、NYET=1 都被误报 halt；必须 mask 后与 STALL=3 比较 |
-| PORT-11 | P1 | open | OUT 中断先置 NAK，后检查 TOG_OK；重复 DATA PID 未通过校验时不恢复 ACK，未完成接收停住 |
-| PORT-12 | P1 | open | EP0 OUT 在同步 completion 回调后才翻转软件 PID；core 已在回调内 re-arm，导致第二包仍等 DATA1。新 SETUP 又未重置软件 PID，抢占旧控制传输时首包也可错 |
-| PORT-13 | P1 | open | reset 清空端点状态后继续处理中断入口快照中的 SETUP/TRANSFER，向 core 分发过期事件 |
-| PORT-14 | P2 | open | close 不清 ep_enable，start_read/write 仍接受关闭端点；reopen IN 不清软件 PID，SET_INTERFACE/重新配置后的首包可能 DATA1 |
-| PORT-15 | P1 | open | PHY 等待循环计数器非 volatile，GCC 14.2 `-O2` 的 RV32 汇编中两段等待全部消失，初始化复位/稳定等待失效 |
+| PORT-10 | P2 | fixed (`1bc869e7`) | `usbd_ep_is_stalled` 用 `ctrl & STALL` 判定，NAK=2、NYET=1 都被误报 halt；必须 mask 后与 STALL=3 比较 |
+| PORT-11 | P1 | fixed (`1bc869e7`) | OUT 中断先置 NAK，后检查 TOG_OK；重复 DATA PID 未通过校验时不恢复 ACK，未完成接收停住 |
+| PORT-12 | P1 | fixed (`1bc869e7`) | EP0 OUT 在同步 completion 回调后才翻转软件 PID；core 已在回调内 re-arm，导致第二包仍等 DATA1。新 SETUP 又未重置软件 PID，抢占旧控制传输时首包也可错 |
+| PORT-13 | P1 | fixed (`1bc869e7`) | reset 清空端点状态后继续处理中断入口快照中的 SETUP/TRANSFER，向 core 分发过期事件 |
+| PORT-14 | P2 | fixed (`1bc869e7`) | close 不清 ep_enable，start_read/write 仍接受关闭端点；reopen IN 不清软件 PID，SET_INTERFACE/重新配置后的首包可能 DATA1 |
+| PORT-15 | P1 | fixed (`1bc869e7`) | PHY 等待循环计数器非 volatile，GCC 14.2 `-O2` 的 RV32 汇编中两段等待全部消失，初始化复位/稳定等待失效 |
+
+验证：`tests/ch32_usbhs/run.sh` 共 95 项断言在 ASan/UBSan 下通过；修复前原始覆盖的
+67 项断言有 14 项失败。RV32 FS/HS × `-O2`/`-Os` 编译通过，优化汇编保留两段 PHY
+等待与软件压栈 ISR 的 `mret`。WCH 官方 CH32V307 SimulateCDC 例程同样在 EP0 OUT
+处理前检查 TOG_OK。本轮无硬件，组合 reset 事件的实机出现频率、PHY 时间及 USB
+线上行为仍需验证；不得把 RAM 寄存器测试视为上板通过。
