@@ -69,7 +69,8 @@ __WEAK void usb_dc_low_level_deinit(void)
 
 int usb_dc_init(uint8_t busid)
 {
-    uint32_t phy_delay;
+    /* Keep the reset/PHY settling waits present in optimized builds. */
+    volatile uint32_t phy_delay;
 
     usb_dc_low_level_init();
 
@@ -158,6 +159,9 @@ int usbd_ep_open(uint8_t busid, const struct usb_endpoint_descriptor *ep)
         g_ch32_usbhs_udc.in_ep[ep_idx].ep_mps = USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize);
         g_ch32_usbhs_udc.in_ep[ep_idx].ep_type = USB_GET_ENDPOINT_TYPE(ep->bmAttributes);
         g_ch32_usbhs_udc.in_ep[ep_idx].ep_enable = true;
+        if (ep_idx > 0) {
+            epx_tx_data_toggle[ep_idx - 1] = false;
+        }
         if (g_ch32_usbhs_udc.in_ep[ep_idx].ep_type == USB_ENDPOINT_TYPE_ISOCHRONOUS) {
             USBHS_DEVICE->ENDP_TYPE |= (1 << (ep_idx));
             USB_SET_TX_CTRL(ep_idx, USBHS_EP_T_RES_NAK | USBHS_EP_T_TOG_0);
@@ -175,8 +179,10 @@ int usbd_ep_close(uint8_t busid, const uint8_t ep)
 {
     uint8_t ep_idx = USB_EP_GET_IDX(ep);
     if (USB_EP_DIR_IS_OUT(ep)) {
+        g_ch32_usbhs_udc.out_ep[ep_idx].ep_enable = false;
         USBHS_DEVICE->ENDP_CONFIG &= ~(1 << (ep_idx + 16));
     } else {
+        g_ch32_usbhs_udc.in_ep[ep_idx].ep_enable = false;
         USBHS_DEVICE->ENDP_CONFIG &= ~(1 << (ep_idx));
     }
     return 0;
@@ -231,9 +237,9 @@ int usbd_ep_is_stalled(uint8_t busid, const uint8_t ep, uint8_t *stalled)
     uint8_t ep_idx = USB_EP_GET_IDX(ep);
 
     if (USB_EP_DIR_IS_OUT(ep)) {
-        *stalled = USB_GET_RX_CTRL(ep_idx) & USBHS_EP_R_RES_STALL ? 1 : 0;
+        *stalled = (USB_GET_RX_CTRL(ep_idx) & USBHS_EP_R_RES_MASK) == USBHS_EP_R_RES_STALL;
     } else {
-        *stalled = USB_GET_TX_CTRL(ep_idx) & USBHS_EP_T_RES_STALL ? 1 : 0;
+        *stalled = (USB_GET_TX_CTRL(ep_idx) & USBHS_EP_T_RES_MASK) == USBHS_EP_T_RES_STALL;
     }
     return 0;
 }
@@ -336,7 +342,8 @@ void USBD_IRQHandler(uint8_t busid)
     /* 事件按因果序处理: 总线复位最优先(丢弃全部在途状态),
      * SETUP 先于其数据/状态阶段的 TRANSFER 事件分发 */
     if (intflag & USBHS_DETECT_FLAG) {
-        USBHS_DEVICE->INT_FG = USBHS_DETECT_FLAG;
+        /* Discard every pending pre-reset event before reopening EP0. */
+        USBHS_DEVICE->INT_FG = intflag;
 
         memset(&g_ch32_usbhs_udc, 0, sizeof(struct ch32_usbhs_udc));
         ch32_usbhs_ep0_prepare();
@@ -350,10 +357,14 @@ void USBD_IRQHandler(uint8_t busid)
 
         usbd_event_reset_handler(0);
         ch32_usbhs_ep0_prepare();
+        return;
     }
 
     if (intflag & USBHS_SETUP_FLAG) {
         USBHS_DEVICE->INT_FG = USBHS_SETUP_FLAG;
+        /* Reset software PIDs too: SETUP may abort an unfinished transfer. */
+        ep0_tx_data_toggle = true;
+        ep0_rx_data_toggle = true;
         /* 规范要求 SETUP 包之后的首个数据包为 DATA1 */
         USBHS_DEVICE->UEP0_TX_CTRL = USBHS_EP_T_RES_NAK | USBHS_EP_T_TOG_1;
         USBHS_DEVICE->UEP0_RX_CTRL = USBHS_EP_R_RES_NAK | USBHS_EP_R_TOG_1;
@@ -425,7 +436,8 @@ void USBD_IRQHandler(uint8_t busid)
                     usbd_event_ep_in_complete_handler(0, ep_idx | 0x80, g_ch32_usbhs_udc.in_ep[ep_idx].actual_xfer_len);
                 }
             }
-        } else if (token == PID_OUT) {
+        } else if ((token == PID_OUT) && (USBHS_DEVICE->INT_ST & USBHS_DEV_UIS_TOG_OK)) {
+            /* Duplicate OUT PIDs must not consume or disarm the pending read. */
             USB_SET_RX_CTRL(ep_idx, (USB_GET_RX_CTRL(ep_idx) & ~USBHS_EP_R_RES_MASK) | USBHS_EP_R_RES_NAK);
             if (ep_idx == 0x00) {
                 read_count = USBHS_DEVICE->RX_LEN;
@@ -433,36 +445,37 @@ void USBD_IRQHandler(uint8_t busid)
                 g_ch32_usbhs_udc.out_ep[ep_idx].actual_xfer_len += read_count;
                 g_ch32_usbhs_udc.out_ep[ep_idx].xfer_len -= read_count;
 
+                /* The completion callback can synchronously arm the next packet. */
+                if (read_count == 0) {
+                    ep0_rx_data_toggle = true;
+                    ep0_tx_data_toggle = true;
+                } else {
+                    ep0_rx_data_toggle ^= 1;
+                }
                 usbd_event_ep_out_complete_handler(0, 0x00, g_ch32_usbhs_udc.out_ep[ep_idx].actual_xfer_len);
 
                 if (read_count == 0) {
                     /* Out status, start reading setup */
                     USBHS_DEVICE->UEP0_DMA = (uint32_t)&g_ch32_usbhs_udc.setup;
                     USBHS_DEVICE->UEP0_RX_CTRL = USBHS_EP_R_RES_ACK;
-                    ep0_rx_data_toggle = true;
-                    ep0_tx_data_toggle = true;
-                } else {
-                    ep0_rx_data_toggle ^= 1;
                 }
             } else {
-                if (USBHS_DEVICE->INT_ST & USBHS_DEV_UIS_TOG_OK) {
-                    read_count = USBHS_DEVICE->RX_LEN;
+                read_count = USBHS_DEVICE->RX_LEN;
 
-                    g_ch32_usbhs_udc.out_ep[ep_idx].xfer_buf += read_count;
-                    g_ch32_usbhs_udc.out_ep[ep_idx].actual_xfer_len += read_count;
-                    g_ch32_usbhs_udc.out_ep[ep_idx].xfer_len -= read_count;
+                g_ch32_usbhs_udc.out_ep[ep_idx].xfer_buf += read_count;
+                g_ch32_usbhs_udc.out_ep[ep_idx].actual_xfer_len += read_count;
+                g_ch32_usbhs_udc.out_ep[ep_idx].xfer_len -= read_count;
 
-                    if ((read_count < g_ch32_usbhs_udc.out_ep[ep_idx].ep_mps) || (g_ch32_usbhs_udc.out_ep[ep_idx].xfer_len == 0)) {
-                        usbd_event_ep_out_complete_handler(0, ep_idx, g_ch32_usbhs_udc.out_ep[ep_idx].actual_xfer_len);
-                    } else {
-                        USB_SET_RX_DMA(ep_idx, (uint32_t)g_ch32_usbhs_udc.out_ep[ep_idx].xfer_buf);
-                        USB_SET_RX_CTRL(ep_idx, (USB_GET_RX_CTRL(ep_idx) & ~USBHS_EP_R_RES_MASK) | USBHS_EP_R_RES_ACK);
-                    }
+                if ((read_count < g_ch32_usbhs_udc.out_ep[ep_idx].ep_mps) || (g_ch32_usbhs_udc.out_ep[ep_idx].xfer_len == 0)) {
+                    usbd_event_ep_out_complete_handler(0, ep_idx, g_ch32_usbhs_udc.out_ep[ep_idx].actual_xfer_len);
+                } else {
+                    USB_SET_RX_DMA(ep_idx, (uint32_t)g_ch32_usbhs_udc.out_ep[ep_idx].xfer_buf);
+                    USB_SET_RX_CTRL(ep_idx, (USB_GET_RX_CTRL(ep_idx) & ~USBHS_EP_R_RES_MASK) | USBHS_EP_R_RES_ACK);
                 }
             }
         }
 
-        /* 传输标志在处理完后清除: 处理期间新完成的事件保持置位 */
+        /* INT_BUSY_EN NAKs new transactions until this flag is cleared. */
         USBHS_DEVICE->INT_FG = USBHS_TRANSFER_FLAG;
     }
 

@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#ifndef CH32_USBHS_TEST_CONFIG_H
+#define CH32_USBHS_TEST_CONFIG_H
+#define CONFIG_USB_PRINTF(...) ((void)0)
+#define CONFIG_USB_DBG_LEVEL 0
+#define CONFIG_USB_ALIGN_SIZE 4
+#define CONFIG_USB_MEMCPY_DISABLE
+#define USB_NOCACHE_RAM_SECTION
+#define USB_CH32_USBHS_IRQ_SW_STACK
+#endif

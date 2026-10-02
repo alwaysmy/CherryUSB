@@ -200,3 +200,24 @@ USBTMC 板上 HS 模式经三级 Hub 链观察到主机侧 `USBD_STATUS_BABBLE_D
 - 2026-09-06：PORT-01~07 移植入 fork（port/ch32/ch32hs；含 EP9 寄存器位修正、FORCE_RST 初始化序列、
   SPEED_TYPE 动态测速与 FS 回退、EP0 prepare、ISR 因果序重排 + SETUP 强制 DATA1、挂起/恢复事件、IRQ 压栈方式宏开关）。
 - 2026-09-06：核对用户 USBTMC 扩展项目（CH32_USBTMC，usbd_tmc 类驱动 + core SET/CLR_HALT 扩展，基线 v1.5.0）：扩展实现整体合理，其 core notify_handler 修正反哺本表 CORE-35。TMC 驱动自身的问题（临界区宏跨编译单元失效、other_speed 描述符类型 0x02 等）记录在该项目，不属于本 fork 代码。
+
+## CH32 USBHS 回归审查（2026-10-02）
+
+基线 `ch32-adapt` `bc7e752a`；逐行复核后以主机 RAM 寄存器测试复现，非上板结果。
+已 fetch 上游 `323ade2f`；上游的 `port/wch/usbhs` 已改为不同寄存器布局/API，
+不能整文件替换 CH32V30x 端口。此次不改无关 core/类驱动。
+
+| ID | 级别 | 状态 | 位置与复现 |
+|---|---|---|---|
+| PORT-10 | P2 | fixed (`1bc869e7`) | `usbd_ep_is_stalled` 用 `ctrl & STALL` 判定，NAK=2、NYET=1 都被误报 halt；必须 mask 后与 STALL=3 比较 |
+| PORT-11 | P1 | fixed (`1bc869e7`) | OUT 中断先置 NAK，后检查 TOG_OK；重复 DATA PID 未通过校验时不恢复 ACK，未完成接收停住 |
+| PORT-12 | P1 | fixed (`1bc869e7`) | EP0 OUT 在同步 completion 回调后才翻转软件 PID；core 已在回调内 re-arm，导致第二包仍等 DATA1。新 SETUP 又未重置软件 PID，抢占旧控制传输时首包也可错 |
+| PORT-13 | P1 | fixed (`1bc869e7`) | reset 清空端点状态后继续处理中断入口快照中的 SETUP/TRANSFER，向 core 分发过期事件 |
+| PORT-14 | P2 | fixed (`1bc869e7`) | close 不清 ep_enable，start_read/write 仍接受关闭端点；reopen IN 不清软件 PID，SET_INTERFACE/重新配置后的首包可能 DATA1 |
+| PORT-15 | P1 | fixed (`1bc869e7`) | PHY 等待循环计数器非 volatile，GCC 14.2 `-O2` 的 RV32 汇编中两段等待全部消失，初始化复位/稳定等待失效 |
+
+验证：`tests/ch32_usbhs/run.sh` 共 95 项断言在 ASan/UBSan 下通过；修复前原始覆盖的
+67 项断言有 14 项失败。RV32 FS/HS × `-O2`/`-Os` 编译通过，优化汇编保留两段 PHY
+等待与软件压栈 ISR 的 `mret`。WCH 官方 CH32V307 SimulateCDC 例程同样在 EP0 OUT
+处理前检查 TOG_OK。本轮无硬件，组合 reset 事件的实机出现频率、PHY 时间及 USB
+线上行为仍需验证；不得把 RAM 寄存器测试视为上板通过。
