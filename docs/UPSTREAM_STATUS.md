@@ -47,3 +47,12 @@
   造成的 pushed_at 领先，commit 均为 1fd876d）。
 - `sakumisu/CherryUSB` 为上游作者本人 fork（12 stars），master 与上游一致，无额外 WIP 提交。
 - 结论：暂无从其他 fork 摘取修复的必要，后续可定期复查（同一 API，按 pushed_at 排序看 AHEAD 的）。
+
+## CH32 定向复核（2026-10-02）
+
+- 已 fetch 官方上游 master `323ade2f49a1194e8b15827036f462743641bf8e`（2026-09-30）。
+- 本 fork CH32 工作基线为 `ch32-adapt` `bc7e752a`，本轮未整体合并上游。
+- 上游旧 CH32 端口在 `45009572` 移至 `port/ch32/legacy`，`612df41f` 改名为
+  `port/wch/legacy`，`5c54ed49`（2026-09-16）删除 legacy。当前 `port/wch/usbhs`
+  使用不同寄存器布局与新 driver API，支持列表不含 CH32V30x，不能直接替换本端口。
+- 上方 2026-09-06 issue/fork 调研属于历史快照，本轮没有更新或重做全库调查。

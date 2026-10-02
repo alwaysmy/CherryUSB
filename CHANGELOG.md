@@ -63,3 +63,15 @@
   （详见 `docs/REVIEW.md`），修复顺序建议见该文档"建议修复顺序"。
 
 [Unreleased]: https://github.com/alwaysmy/CherryUSB/compare/v1.6.1...HEAD
+
+## CH32 USBHS 定向回归修复（2026-10-02，ch32-adapt）
+
+- PORT-10：GET_STATUS 按响应位精确判断 STALL，不再把 NAK/NYET 误报为 halt。
+- PORT-11：重复 OUT PID 不消耗接收状态或将已挂接收留在 NAK；覆盖 bulk 与 EP0。
+- PORT-12：SETUP 重置 EP0 软件 PID，OUT 完成前先更新 PID，再允许 core 回调重挂下一包。
+- PORT-13：总线复位清除入口快照中的旧事件，避免重置后派发过期 SETUP/completion。
+- PORT-14：端点 close 清 ep_enable，IN reopen 从 DATA0 开始。
+- PORT-15：PHY 等待计数器设为 volatile，保留优化构建中的两段等待。
+- 新增 RAM 寄存器驱动回归（ASan/UBSan）、CH32 分支 PR CI；RV32 FS/HS × -O2/-Os
+  编译通过，检查了两段等待循环和软件压栈 ISR 的 mret。未进行硬件测试；WCH fast ABI、
+  PHY 实际等待时间、枚举/重插/USBTMC Clear 与吞吐仍需板级复测。core 无改动。
